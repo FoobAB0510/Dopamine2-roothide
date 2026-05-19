@@ -1,11 +1,17 @@
 name: "*** build tipa file ***"
 
 on:
-  # schedule:
-  #   - cron: '0 */2 * * *' # every 2 hours
+  schedule:
+    - cron: "0 */2 * * *" # every 2 hours
   workflow_dispatch:
-  pull_request:
-  push:
+    inputs:
+      commit:
+        description: Commit SHA, tag, or branch to build (optional)
+        required: false
+        default: ""
+
+env:
+  PINNED_SHA: "" # set this to a fixed commit for scheduled builds
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -15,11 +21,35 @@ jobs:
   build:
     runs-on: macos-14
     steps:
-      - name: Checkout
+      - name: Resolve checkout ref
         run: |
           set -x
-          git clone --recursive https://github.com/roothide/Dopamine2-roothide ${{ github.workspace }}
-          
+          REF="${{ inputs.commit }}"
+          if [ -z "$REF" ]; then REF="${PINNED_SHA}"; fi
+          if [ -n "$REF" ]; then
+            echo "CHECKOUT_REF=$REF" >> $GITHUB_ENV
+            echo "CHECKOUT_USE_REF=true" >> $GITHUB_ENV
+          else
+            echo "CHECKOUT_USE_REF=false" >> $GITHUB_ENV
+          fi
+
+      - name: Checkout (default)
+        if: ${{ env.CHECKOUT_USE_REF != 'true' }}
+        uses: actions/checkout@v4
+        with:
+          repository: roothide/Dopamine2-roothide
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Checkout (ref)
+        if: ${{ env.CHECKOUT_USE_REF == 'true' }}
+        uses: actions/checkout@v4
+        with:
+          repository: roothide/Dopamine2-roothide
+          ref: ${{ env.CHECKOUT_REF }}
+          submodules: recursive
+          fetch-depth: 0
+
       - name: Install Procursus
         uses: dhinakg/procursus-action@main
         with:
@@ -45,8 +75,6 @@ jobs:
           set -x
           git clone https://github.com/CRKatri/trustcache
           cd trustcache
-          export CFLAGS="$CFLAGS -I$(brew --prefix openssl)/include -arch arm64"
-          export LDFLAGS="$LDFLAGS -L$(brew --prefix openssl)/lib -arch arm64"
           gmake -j$(sysctl -n hw.physicalcpu) OPENSSL=1
           sudo cp trustcache /opt/procursus/bin/
 
@@ -72,9 +100,8 @@ jobs:
           typeset itemcount=$(plutil -extract items raw -expect array ./Application/Dopamine/UI/Settings/Credits.plist)
           for ((i=0; i<$itemcount; i++)); do if [ "$(plutil -extract items.$i.headerCellClass raw ./Application/Dopamine/UI/Settings/Credits.plist)" = "DOCreditsCell" ]; then DOCreditsCellIndex=$i; break; fi; done;
           plutil -insert items.$DOCreditsCellIndex.names -xml "<dict><key>name</key><string>${{ github.actor }}</string><key>link</key><string>https://github.com/${{ github.repository }}</string></dict>" -append ./Application/Dopamine/UI/Settings/Credits.plist
-          rm -rf $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc.modulemap
           gmake -j$(sysctl -n hw.physicalcpu)
-          VERSION=$(cat ./BaseBin/_external/basebin/.version)-$(git rev-parse --short HEAD)
+          VERSION=$(cat ./BaseBin/_external/basebin/.version).$(git rev-parse --short HEAD)
           mv ./Application/Dopamine.tipa  "./Application/roothide-Dopamine-${VERSION}.tipa"
           echo "version=${VERSION}" >> $GITHUB_ENV
 
